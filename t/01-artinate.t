@@ -1,6 +1,6 @@
 #!perl
 
-use Test::More tests => 3;
+use Test::More tests => 6;
 use Acme::AsciiArtinator;
 use strict;
 use warnings;
@@ -25,4 +25,14 @@ print STDERR @output;
 ok($output =~ /print/);
 ok($output =~ /Hello/);
 ok($output =~ /;;/ || $output =~ /\{\w+\}/);
+
+################################################
+
+@output = asciiartinate( code => $code, art => $art, test_argv1 => [] );
+ok(defined $Acme::AsciiArtinator::TestOutput[1]);
+ok(not defined $Acme::AsciiArtinator::TestOutput[0]);
+ok(not defined $Acme::AsciiArtinator::TestOutput[2]);
+
+
+
 

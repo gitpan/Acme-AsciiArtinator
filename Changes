@@ -1,5 +1,8 @@
 Revision history for Acme-AsciiArtinator
 
-0.01    Date/time
+0.01    2009-11-03
         First version, released on an unsuspecting world.
+
+0.02	2009-11-04
+	Improved padding algorithm, added hooks for pre- and post-testing.
 

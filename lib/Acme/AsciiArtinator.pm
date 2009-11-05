@@ -3,8 +3,11 @@ use Carp;
 use base 'Exporter';
 use strict;
 use warnings;
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 our @EXPORT = qw(asciiartinate);
+$| = 1;
+
+my $DEBUG = 0;
 
 #############################################################################
 
@@ -18,6 +21,10 @@ sub asciiartinate {
   }
 
   my ($PIC, $CODE, $OUTPUT);
+
+  if (defined $opts{"debug"} && $opts{"debug"}) {
+    $DEBUG = 1;
+  }
 
   if (defined $opts{"art_file"}) {
     my $fh;
@@ -51,7 +58,7 @@ sub asciiartinate {
   if (defined $opts{"output"}) {
     $OUTPUT = $opts{"output"};
   } else {
-    print STDERR "Output will go to \"ascii-art.pl\"\n";
+    print STDERR "Output will go to \"ascii-art.pl\"\n" if $DEBUG;
     $OUTPUT = "ascii-art.pl";
   }
 
@@ -69,6 +76,43 @@ sub asciiartinate {
     }
   }
 
+  my $ntest = 1;
+  while (defined $opts{"test_argv$ntest"} || defined $opts{"test_input$ntest"}) {
+    my (@test_argv, @test_stdin) = ();
+
+    @test_argv = @{$opts{"test_argv$ntest"}} if defined $opts{"test_argv$ntest"};
+    @test_stdin = @{$opts{"test_input$ntest"}} if defined $opts{"test_input$ntest"};
+    my $fh;
+    if (open($fh, ">", "ascii-art-test-$ntest-$$.pl")) {
+      print $fh $CODE;
+      close $fh;
+
+      my $output = "";
+      if (defined $opts{"test_input$ntest"}) {
+	open($fh, ">", "ascii-art-test-$ntest-$$.stdin");
+	print $fh @test_stdin;
+	close $fh;
+	print qq{Running test: $^X ascii-art-test-$ntest-$$.pl @test_argv < ascii-art-test-$ntest-$$.stdin\n} if $DEBUG;
+	$output = qx{$^X ascii-art-test-$ntest-$$.pl @test_argv < ascii-art-test-$ntest-$$.stdin};
+	unlink "ascii-art-test-$ntest-$$.stdin";
+      } else {
+	print qq{Running test: $^X ascii-art-test-$ntest-$$.pl @test_argv\n};
+	$output = qx{$^X ascii-art-test-$ntest-$$.pl @test_argv};
+      }
+      print "Ran pre-test # $ntest with argv: \"@test_argv\", stdin: \"@test_stdin\"\n";
+
+      $Acme::AsciiArtinator::TestOutput[$ntest] = $output;
+      unlink "ascii-art-test-$ntest-$$.pl";
+    } else {
+      carp "Could not write code to disk in order to run pre-test.\n";
+    }
+  } continue {
+    $ntest++;
+  }
+
+
+  ###############################################
+
   my $max_tries = $opts{"retry"} || 100;
 
 
@@ -84,8 +128,8 @@ sub asciiartinate {
     if (defined $newc) {
       print "Code with filler: @$newt\n";
       @tokens = @$newt;
-
       print_code_to_pic($PIC, @tokens);
+
       my $fh;
       open($fh, ">", $OUTPUT);
       select $fh;
@@ -96,12 +140,62 @@ sub asciiartinate {
       my $c1 = &compile_check($OUTPUT);
       if ($c1 > 0) {
 	croak "Artinated code does not compile! Darn.\n";
+	exit $c1 >> 8;
       }
-      exit $c1 >> 8 if $c1;
 
       open($fh,"<", $OUTPUT);
       my @output = <$fh>;
       close $fh;
+
+      # test output
+      #
+      # make sure artinated code produces same outputs
+      # as the original code on the test cases.
+      #
+      $ntest = 1;
+      if (defined $opts{"test_argv1"}) {
+	print "Running post-tests on artinated code\n";
+      }
+      while (defined $opts{"test_argv$ntest"} || defined $opts{"test_input$ntest"}) {
+	my (@test_argv, @test_stdin) = ();
+
+	print "Testing output # $ntest:\n";
+
+	@test_argv = @{$opts{"test_argv$ntest"}} if defined $opts{"test_argv$ntest"};
+	@test_stdin = @{$opts{"test_input$ntest"}} if defined $opts{"test_input$ntest"};
+	my $fh;
+	next if !defined $Acme::AsciiArtinator::TestOutput[$ntest];
+
+	my $output = "";
+	if (defined $opts{"test_input$ntest"}) {
+	  open($fh, ">", "ascii-art-test-$ntest-$$.stdin");
+	  print $fh @test_stdin;
+	  close $fh;
+	  $output = qx{$^X "$OUTPUT" @test_argv < ascii-art-test-$ntest-$$.stdin};
+	  unlink "ascii-art-test-$ntest-$$.stdin";
+	} else {
+	  $output = qx{$^X "$OUTPUT" @test_argv};
+	}
+	print "Ran post-test # $ntest with argv: \"@test_argv\", stdin: \"@test_stdin\"\n";
+    
+	if ($output eq $Acme::AsciiArtinator::TestOutput[$ntest]) {
+	  print "Post-test # $ntest: PASS\n";
+	  $Acme::AsciiArtinator::TestResult[$ntest] = "PASS";
+	} else {
+	  print "Post-test # $ntest: FAIL\n";
+	  $Acme::AsciiArtinator::TestResult[$ntest] = "FAIL";
+	  print STDERR "---------------------------------\n";
+	  print STDERR "Original results for test # $ntest:\n";
+	  print STDERR "----------------\n";
+	  print STDERR $Acme::AsciiArtinator::TestOutput[$ntest];
+	  print STDERR "\n---------------------------------\n";
+	  print STDERR "Final results for test # $ntest:\n";
+	  print STDERR $output;
+	  print STDERR "\n---------------------------------\n\n";
+	}
+      } continue {
+	$ntest++;
+      }
       return @output;
     }
   }
@@ -213,7 +307,7 @@ sub tokenize_code {
     $_ = $INPUT[$i];
     $Q = "@INPUT[$i..$#INPUT]";
 
-    print STDERR "\$Q = ", substr($Q,0,8), "... SIGIL=$sigil\n" if $_ eq "q";
+    print STDERR "\$Q = ", substr($Q,0,8), "... SIGIL=$sigil\n" if $_ eq "q" && $DEBUG;
 
     # $#  could be "the output format of printed numbers"
     # or it could be the start of an expression like  $#X  or  $#{@$X}
@@ -467,11 +561,16 @@ sub padding_needed {
   my $ib = 0;
   my $tc = 0;
   my $bc = $blocks[$ib++];
+  my $it = 0;
   foreach my $t (@tokens) {
     my $tt = length $t;
     if ($tt > $bc) {
-      print "\rNeed to pad by ",$bc," spaces at or before position $tc            ";
-      return [$tc, $bc];
+      if ($DEBUG) {
+	print "Need to pad by ",$bc," spaces at or before position $tc\n";
+      } else {
+	print "\rNeed to pad by ",$bc," spaces at or before position $tc            ";
+      }
+      return [$it, $bc];
     }
     $bc -= $tt;
     if ($bc == 0) {
@@ -487,10 +586,16 @@ sub padding_needed {
       }
     }
     $tc += length $t;
+    $it++;
   }
   return;
 }
 
+#
+# choose a random number between 0 and n-1,
+# with the distribution heavily weighted toward
+# the high end of the range
+#
 sub hi_weighted_rand {
   my $n = shift;
   my (@p, $r, $p);
@@ -522,31 +627,28 @@ sub try_to_pad {
     #         = expr    --->   = 0 or expr , = 0 xor expr
 
   my $t = 0;
-  my $it = 0;
-  for ($it = 0; $it < @$tref; $it++) {
-    last if $t + length $tref->[$it] > $pos;
-    $t += length $tref->[$it];
-  }
+  my $it = $pos;
 
-#  print STDERR "Trying to pad at ", join " :: ", @{$tref}[$it-1 .. $it+1], "\n";
-#  print STDERR "Contexts: ", join " :: ", @{$cref}[$it-1 .. $it+1], "\n\n";
+  print STDERR "Trying to pad at [$it]: ", join " :: ", @{$tref}[$it-1 .. $it+1], "\n" if $DEBUG;
+  print STDERR "Contexts: ", join " :: ", @{$cref}[$it-1 .. $it+1], "\n\n" if $DEBUG;
 
   my $z = rand() * 0.5;
   $z = 0.45 if $it == 0;
-  if ($z < 0.45 && $npad > 1) {
+  if ($z < 0.25 && $npad > 1) {
 
     # convert  SIGIL name  -->  SIGIL { name }
 
     if ($cref->[$it] eq "name" && $cref->[$it-1] eq "SIGIL") {
-      # print STDERR "Padding name $tref->[$it] at pos $t\n";
+      print STDERR "Padding name $tref->[$it] at pos $it\n" if $DEBUG;
 
       splice @$tref, $it+1, 0, "}";
       splice @$tref, $it, 0, "{";
       splice @$cref, $it+1, 0, "filler";
       splice @$cref, $it, 0, "filler";
+      return 2;
     }
 
-  } elsif ($z < 0.05) {
+  } elsif ($z < 0.50) {
 
     # try to pad the beginning of a statement with filler
 
@@ -555,10 +657,11 @@ sub try_to_pad {
 	|| $cref->[$it] eq "flexible filler"
 	|| $cref->[$it-1] eq "flexible filler") {
 
-      # print STDERR "Padding with flexible filler x $npad at pos $t\n";
+      print STDERR "Padding with flexible filler x $npad at pos $it\n" if $DEBUG;
       while ($npad-- > 0) {
 	splice @$tref, $it, 0, ";";
 	splice @$cref, $it, 0, "flexible filler";
+	return $_[1];
       }
     }
   } elsif ($z < 0.5 && $npad > 1) {
@@ -566,10 +669,55 @@ sub try_to_pad {
   } elsif ($z < 0.75) {
 
   }
-
+  return 0;
 }
 
 sub pad {
+  my @tokens = @{$_[0]};
+  my @contexts = @{$_[1]};
+  my @blocks = @{$_[2]};
+
+  my $nblocks = 0;
+  map { $nblocks += $_ } @blocks;
+
+  my ($needed, $where, $howmuch);
+  while ($needed = padding_needed(\@tokens,\@blocks)) {
+    ($where,$howmuch) = @$needed;
+    if ($where < 0 && $howmuch < 0) {
+      if ($DEBUG) {
+	print_code_to_pic($Acme::AsciiArtinator::PIC,@tokens);
+	sleep 1;
+      }
+      return;
+    }
+
+    my $npad = $howmuch > 1 ? $howmuch - hi_weighted_rand($howmuch-1) : $howmuch;
+    while (rand() > 0.95 && $where > 0) {
+      $where--;
+    }
+
+    while ($where >= 0 && !try_to_pad($where, $npad, \@tokens, \@contexts)) {
+      $where-- if rand() > 0.4;
+    }
+
+    my $tlength = 0;
+    map { $tlength += length $_ } @tokens;
+    if ($tlength > $nblocks) {
+      print "Padded length exceeds space length.\n";
+
+      if ($DEBUG) {
+	print_code_to_pic($Acme::AsciiArtinator::PIC, @tokens);
+	print "\n\n";
+	sleep 1;
+      }
+
+      return;
+    }
+  }
+  ([ @tokens ], [ @contexts ]);
+}
+
+sub pad0 {
   my @tokens = @{$_[0]};
   my @contexts = @{$_[1]};
   my @blocks = @{$_[2]};
@@ -630,7 +778,7 @@ Acme::AsciiArtinator - Embed Perl code in ASCII artwork
 
 =head1 VERSION
 
-0.01
+0.02
 
 =head1 SYNOPSIS
 
@@ -968,6 +1116,30 @@ directory.
 Runs the Perl interpreter with the C<-cw> flags on the
 original code string and asserts that the code compiles.
 
+=item debug => 0 | 1
+
+Causes the ASCII Artinator to display verbose messages 
+about what it is trying to do while it is doing what it
+is trying to do.
+
+=item test_argv1 => [ @args ], test_argv2 => [ @args ] , test_argv3 => ...
+
+Executes the original and the artinated code and compares the output
+to make sure that the artination process did not change the
+behavior of the code. A separate test will be conducted for
+every C<test_argvE<lt>NNNE<gt>> parameter passed to the 
+C<asciiartinate> method. The arguments associated with each
+parameter will be passed to the code as command-line arguments.
+
+=item test_input1 => [ @data ], test_input2 => [ @data ], test_input3 => ...
+
+Executes the original and the artinated code and compares the output
+to make sure that the artination process did not change the
+behavior of the code. A separate test will be conducted for
+every C<test_inputE<lt>NNNE<gt>> parameter passed to the 
+C<asciiartinate> method. The data associated with each
+parameter will be passed to the standard input of the code.
+
 
 =back
 
@@ -995,13 +1167,6 @@ Lots of future enhancements are possible:
 
 =over 4
 
-=item * Read expected input(s) and output(s) to verify that the artinated code does the same
-thing as the original code.
-
-=back
-
-=over 4
-
 =item * Have a concept of "grayspace" in the artwork. These are positions where
 we can put either whitespace or a character from the code, whichever makes it
 easier to align the code.
@@ -1017,7 +1182,7 @@ more flexible without changing its behavior.
 
 =head1 BUGS
 
-Probably lots. 
+Probably lots.
 
 =head1 SEE ALSO
 
