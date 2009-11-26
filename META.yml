@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Acme-AsciiArtinator
-version:            0.02
+version:            0.04
 abstract:           Embed Perl code in ASCII artwork
 author:
     - Marty O'Brien <mob@cpan.org>

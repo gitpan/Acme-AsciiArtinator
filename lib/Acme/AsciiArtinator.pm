@@ -3,7 +3,7 @@ use Carp;
 use base 'Exporter';
 use strict;
 use warnings;
-our $VERSION = '0.02';
+our $VERSION = '0.04';
 our @EXPORT = qw(asciiartinate);
 $| = 1;
 
@@ -126,8 +126,17 @@ sub asciiartinate {
 
     my ($newt,$newc) = &pad(\@tokens, \@contexts, \@blocks);
     if (defined $newc) {
-      print "Code with filler: @$newt\n";
+
+      for (my $i=0; $i<@$newt; $i++) {
+	print $newt->[$i], "\t", $newc->[$i], "\n";
+      }
+
       @tokens = @$newt;
+
+      if ($opts{"filler"} != 0) {
+	&tweak_padding($opts{"filler"}, \@tokens, \@contexts);
+      }
+
       print_code_to_pic($PIC, @tokens);
 
       my $fh;
@@ -142,6 +151,12 @@ sub asciiartinate {
 	croak "Artinated code does not compile! Darn.\n";
 	exit $c1 >> 8;
       }
+
+      ##################################################
+      #
+      # artination complete
+      #
+      ##################################################
 
       open($fh,"<", $OUTPUT);
       my @output = <$fh>;
@@ -184,14 +199,14 @@ sub asciiartinate {
 	} else {
 	  print "Post-test # $ntest: FAIL\n";
 	  $Acme::AsciiArtinator::TestResult[$ntest] = "FAIL";
-	  print STDERR "---------------------------------\n";
+	  print STDERR "-- " x 13, "\n";
 	  print STDERR "Original results for test # $ntest:\n";
-	  print STDERR "----------------\n";
+	  print STDERR "-- " x 7, "\n";
 	  print STDERR $Acme::AsciiArtinator::TestOutput[$ntest];
-	  print STDERR "\n---------------------------------\n";
+	  print STDERR "\n", "-- " x 13, "\n";
 	  print STDERR "Final results for test # $ntest:\n";
 	  print STDERR $output;
-	  print STDERR "\n---------------------------------\n\n";
+	  print STDERR "\n", "-- " x 13, "\n\n";
 	}
       } continue {
 	$ntest++;
@@ -206,22 +221,33 @@ sub asciiartinate {
   }
 }
 
-
+#
+# run a file containing Perl code for a Perl compilation check
+#
 sub compile_check {
   my ($file) = @_;
   print "\n";
-  print "-----------------------------------\n";
+  print "- " x 20, "\n";
   print "Compile check for $file:\n";
-  print "-----------------------------------\n";
+  print "- " x 20, "\n";
   print `$^X -cw "$file"`;
-  print "-----------------------------------\n";
+  print "- " x 20, "\n";
   return $?;
+}
+
+sub tweak_padding {
+  my ($filler, $tref, $cref) = @_;
+
+  # TODO: if there are many consecutive characters of padding
+  #       in the code, we can improve its appearance by 
+  #       inserting some quoted text in void context.
+
 }
 
 #############################################################################
 #
-# Perl code tokenization 
-#
+# code tokenization -- split code into tokens that should
+# not be further divisible by whitespace
 #
 
 # You know that this [decompiling Perl code] is impossible, right ?
@@ -229,14 +255,12 @@ sub compile_check {
 
 my @token_keywords = qw(&&= ||= <<= >>= <=> ... **= //=
    && || ++ -- == != <= >= -> ** =~ !~ 
-   <= >= => .. += -= *= /= %= |= &= ^= << >>
-   .= <> // );    
+   <= >= => .. += -= *= /= %= |= &= ^= << >> .= <> //);
 
 # //= is an operator in perl 5.10, I believe
 # //  is usually a regular expression, or a perl 5.10 operator
 
 my %sigil = qw($ 1 @ 2 % 3 & 4 & 0);
-
 
 #
 # does the current string begin with an "operator keyword"?
@@ -265,6 +289,7 @@ sub STRPOS {
 }
 
 #
+# what does the "/" token that we just encountered mean?
 # this is a hard game to play.
 # see http://www.perlmonks.org/index.pl?node_id=44722
 #
@@ -359,13 +384,13 @@ sub tokenize_code {
       if ($_ eq "/!") {
 	push @contexts, "misanalyzed regex or operator";
       } elsif ($_ eq "/") {
-	push @contexts, "regular expression C";
+	push @contexts, "regular expression C ///";
       } else {
 	push @contexts, "quoted string";
       }
       $i = $j;
 
-    } elsif (!$sigil && $Q =~ /^[-+]?[0-9]*\.{0,1}[0-9]+([eE][-+]?[0-9]+)?/) {
+    } elsif (!$sigil && $Q =~ /^[0-9]*\.{0,1}[0-9]+([eE][-+]?[0-9]+)?/) {
 
       # if first char starts a numeric literal, include all characters
       # from the number in the token
@@ -377,7 +402,7 @@ sub tokenize_code {
       push @contexts, "numeric literal A";
       $i = $i - 1 + length $token;
 
-    } elsif (!$sigil && $Q =~ /^[-+]?[0-9]+\.{0,1}[0-9]*([eE][-+]?[0-9]+)?/) {
+    } elsif (!$sigil && $Q =~ /^[0-9]+\.{0,1}[0-9]*([eE][-+]?[0-9]+)?/) {
 
       $token = $&;
       push @tokens, $token;
@@ -403,7 +428,7 @@ sub tokenize_code {
 	$escaped = 0;
       }
       push @tokens, "@INPUT[$i..$j]";
-      push @contexts, "regular expression A";
+      push @contexts, "regular expression A /$terminator/";
       $i = $j;
 
     } elsif (!$sigil && ($Q =~ /^s\W/ || $Q =~ /^y\W/ || $Q =~ /^tr\W/)) {
@@ -425,7 +450,7 @@ sub tokenize_code {
 	$escaped = 0;
       }
       push @tokens, "@INPUT[$i..$j]";
-      push @contexts, "regular expression B";
+      push @contexts, "regular expression B /$terminator/";
       $i = $j;
 
     } elsif ($Q =~ /^[a-zA-Z_]\w*/) {
@@ -436,7 +461,8 @@ sub tokenize_code {
       # "T"x90 should be ["T",x,90] not ["T",x90]
       #  x90 should be x,90 when previous token is a scalar
       if ($token =~ /^x\d+$/) {
-	if ($tokens[-1] =~ /^[\'\"]/ || $tokens[-1] eq ")") {
+	if ($tokens[-1] =~ /^[\'\"]/ || $tokens[-1] eq ")"
+	   || $contexts[-1] =~ /name/) {
 	  $token = "x";
 	}
       }
@@ -444,9 +470,79 @@ sub tokenize_code {
       push @tokens, $token;
       if ($sigil) {
 	push @contexts, "name";
-      } elsif ($contexts[-1] =~ /regular expression/) {
+      } elsif ($contexts[-1] =~ /regular expression ([ABC]) \/(.)\//) {
 	push @contexts, "regular expression modifier";
-	# XXX if $token =~ /x/ then the previous token need not be contiguous ...
+	my $regex_type = $1;
+	my $terminator = $2;
+
+	# with some modifiers we can be more flexible with the earlier tokens ...
+	#     e - second pattern is an expression that can be flexible
+	#     x - first and/or second pattern can contain whitespace
+
+	if (0 && $token =~ /e/ && $token =~ /x/ && $tokens[-2] =~ /^s/) {
+	  $DB::single=1;
+	  pop @tokens;
+	  pop @contexts;
+	  my $regex = pop @tokens;
+	  my $regex_context = pop @contexts;
+	  my $terminator2 = $terminator;
+	  $terminator2 =~ tr/])}>/[({</; # >})]
+	  my $t1 = index($regex,$terminator2);
+	  my $t2 = index($regex,$terminator,$t1+1);
+
+	  push @tokens, substr($regex,0,$t1+1);
+	  push @contexts, "regular expression x /$terminator/";
+
+	  for (my $t=$t1+1; $t<=$t2; $t++) {
+	    if (substr($regex,$t,1) =~ /\S/) {
+	      push @tokens, substr($regex,$t,1);
+	      push @contexts, "content of regex/x";
+	    }
+	  }
+	  $i -= length($token) + length($regex) - $t2 - 1;
+
+	  # positions $i to the start of the 2nd pattern,
+          # which can be tokenized as a perl expression.
+          # Hopefully the terminator can be recognized
+
+	} elsif ($token =~ /x/) {
+	  pop @tokens;
+	  pop @contexts;
+	  my $regex = pop @tokens;
+	  my $regex_context = pop @contexts;
+	  my $terminator2 = $terminator;
+	  $terminator2 =~ tr/])}>/[({</;
+	  my $t1 = index($regex,$terminator2);
+	  my $t2 = index($regex,$terminator,$t1+1);
+
+	  push @tokens, substr($regex,0,$t1+1);
+	  push @contexts, "regular expression x /$terminator/";
+
+	  for (my $t=$t1+1; $t<=$t2; $t++) {
+	    if (substr($regex,$t,1) =~ /\S/) {
+	      push @tokens, substr($regex,$t,1);
+	      push @contexts, "content of regex/x";
+	    }
+	  }
+	  $i -= length($token) + length($regex) - $t2 - 1;
+
+	} elsif ($token =~ /e/ && $tokens[-2] =~ /^s/) {
+	  if ($regex_type eq "B") {  # s///, tr///, y///
+	    pop @tokens;
+	    pop @contexts;
+	    my $regex = pop @tokens;
+	    my $regex_context = pop @contexts;
+	    my $terminator2 = $terminator;
+	    $terminator2 =~ tr/])}>/[({</;
+	    my $t1 = index($regex,$terminator2);
+	    my $t2 = index($regex,$terminator,$t1+1);
+
+	    push @tokens, substr($regex,0,$t2+1);
+	    push @contexts, "regular expression b /$terminator/";
+	    $i -= length($token) + length($regex) - $t2 - 1;
+	  }
+	}
+
       } else {
 	push @contexts, "alphanumeric literal";   # bareword? name? label? keyword?
       }
@@ -486,14 +582,16 @@ sub tokenize_code {
     $sigil = 0;
   }
 
-  print "----------------------------\n";
-  my @c = @contexts;
-  foreach $token (@tokens) {
-    my $cc = shift @c;
-    print $token,"\t",$cc,"\n";
+  if ($DEBUG) {
+    print "- " x 20,"\n";
+    my @c = @contexts;
+    foreach $token (@tokens) {
+      my $cc = shift @c;
+      print $token,"\t",$cc,"\n";
+    }
+    print "- " x 20,"\n";
+    print "Total token count: ", scalar @tokens, "\n";
   }
-  print "----------------------------\n";
-  print "Total token count: ", scalar @tokens, "\n";
 
   @asciiartinate::contexts = @contexts;
   @asciiartinate::tokens = @tokens;
@@ -520,21 +618,30 @@ sub tokenize_art {
 
   my $white = 1;
   my $block_size = 0;
-  my @tokens = ();
+  my @blocks = ();
   foreach my $char (@INPUT) {
     if ($char eq " " || $char eq "\n" || $char eq "\t") {
       if ($block_size > 0) {
-	push @tokens, $block_size;
+	push @blocks, $block_size;
 	$block_size = 0;
+      }
+
+      # certain token combos like the special Perl vars
+      # ($$ $" $| $! etc.) can be separated by spaces and tabs
+      # but not by newlines! Let's use block of size 0 to
+      # indicate where a newline is.
+
+      if ($char eq "\n") {
+	push @blocks, 0;
       }
     } else {
       ++$block_size;
     }
   }
   if ($block_size > 0) {
-    push @tokens, $block_size;
+    push @blocks, $block_size;
   }
-  return @tokens;
+  return @blocks;
 }
 
 sub asciiindex_art {
@@ -542,6 +649,9 @@ sub asciiindex_art {
   &tokenize_art($X);
 }
 
+#
+# replace darkspace on the pic with characters from the code
+#
 sub print_code_to_pic {
   my ($pic, @tokens) = @_;
   local $" = '';
@@ -554,26 +664,68 @@ sub print_code_to_pic {
 }
 
 
-
+#
+# find misalignment between multi-character tokens and blocks
+# and report position where additional padding is needed for
+# alignment
+#
 sub padding_needed {
   my @tokens = @{$_[0]};
-  my @blocks = @{$_[1]};
+  my @contexts = @{$_[1]};
+  my @blocks = @{$_[2]};
   my $ib = 0;
   my $tc = 0;
   my $bc = $blocks[$ib++];
   my $it = 0;
+  while ($bc == 0) {
+    $bc = $blocks[$ib++];
+    if ($ib > @blocks) {
+      print "Error: picture is not large enough to contain code!\n";
+
+      print map {(" ",length $_)} @tokens;
+      print "\n\n@blocks\n";
+
+      return [-1,-1];
+    }
+  }
   foreach my $t (@tokens) {
     my $tt = length $t;
+    defined $tt or print "! \$tt is not defined! \$it=$it \$ib=$ib\n";
+    defined $bc or print "! \$bc is not defined! \$it=$it \$ib=$ib \$tt=$tt\n";
     if ($tt > $bc) {
       if ($DEBUG) {
-	print "Need to pad by ",$bc," spaces at or before position $tc\n";
+	print "Need to pad by $bc spaces at or before position $tc\n";
       } else {
-	print "\rNeed to pad by ",$bc," spaces at or before position $tc            ";
+	print "\rNeed to pad by $bc spaces at or before position $tc            ";
       }
       return [$it, $bc];
     }
+
     $bc -= $tt;
-    if ($bc == 0) {
+
+    #
+    # for regular Perl variables ( "$x", "@bob" ), it is OK to split
+    # the sigil and the var name with any whitespace ("$ x", "@\n\tbob").
+    # For special Perl vars ( '$"', "$/", "$$" ), it is OK to split
+    # with spaces and tabs but not with newlines.
+    # 
+    # Check for this condition here and say that padding is needed if
+    # a special var is currently aligned on a newline.
+    #
+    if ($bc == 0 && $blocks[$ib] == 0 && $tokens[$it] eq "\$"
+	&& $contexts[$it] eq "SIGIL" && $contexts[$it+1] eq "name"
+	&& length($tokens[$it+1]) == 1 && $tokens[$it+1] =~ /\W/) {
+
+      warn "\$tt > \$bc but padding still needed: \n",
+	(join " : ", @tokens[0 .. $it+1]), "\n",
+	  (join " : ", @contexts[0 .. $it+1]), "\n",
+	    (join " : ", @blocks[0 .. $ib+1]), "\n";
+
+      return [$it, 1] if 1;
+    }
+
+
+    while ($bc == 0) {
       $bc = $blocks[$ib++];
       if ($ib > @blocks) {
 	print "Error: picture is not large enough to contain code!\n";
@@ -582,7 +734,6 @@ sub padding_needed {
 	print "\n\n@blocks\n";
 
 	return [-1,-1];
-	$bc = 100;
       }
     }
     $tc += length $t;
@@ -609,18 +760,22 @@ sub hi_weighted_rand {
   return $n;
 }
 
+#
+# look for opportunity to insert padding into the
+# code at the specified location
+#
 sub try_to_pad {
   my ($pos, $npad, $tref, $cref) = @_;
 
-    #     padding techniques:
-    #         SIGIL name --->   SIGIL { name }
-    #         XXX       --->    ( XXX )
+    #      padding techniques:
+    # X        SIGIL name --->   SIGIL { name }
+    #          XXX       --->    ( XXX )
     #              for XXX in (numeric literal,quoted string)
     #         XXX ;     --->    XXX ;;  
-    #              for XXX in (quoted string,numeric literal,regular expression,
+    #              for XXX in (quoted string,numeric literal,regular expression
     #                          <> operator, ")"
-    #         }         --->   ; }  for } that ends a code BLOCK
-    #         ; }       --->   ; ; }
+    # X       }         --->   ; }  for } that ends a code BLOCK
+    # X       ; }       --->   ; ; }
     #         inserting strings in void context after semi-colons (for howmuch > 2)
     #         = expr    --->   = 0|| expr  (if expr does not have ops with lower prec than ||)
     #         = expr    --->   = 1&& expr  (if expr does not have ops with lower prec than &&)
@@ -666,12 +821,21 @@ sub try_to_pad {
     }
   } elsif ($z < 0.5 && $npad > 1) {
 
+    # reserved for future use ?
+
   } elsif ($z < 0.75) {
+
+    # this space intentionally left blank
 
   }
   return 0;
 }
 
+#
+# find all misalignments and insert padding into the code
+# until all code is aligned or until the padded code is
+# too large for the pic.
+#
 sub pad {
   my @tokens = @{$_[0]};
   my @contexts = @{$_[1]};
@@ -681,7 +845,7 @@ sub pad {
   map { $nblocks += $_ } @blocks;
 
   my ($needed, $where, $howmuch);
-  while ($needed = padding_needed(\@tokens,\@blocks)) {
+  while ($needed = padding_needed(\@tokens,\@contexts,\@blocks)) {
     ($where,$howmuch) = @$needed;
     if ($where < 0 && $howmuch < 0) {
       if ($DEBUG) {
@@ -717,56 +881,29 @@ sub pad {
   ([ @tokens ], [ @contexts ]);
 }
 
-sub pad0 {
-  my @tokens = @{$_[0]};
-  my @contexts = @{$_[1]};
-  my @blocks = @{$_[2]};
 
-  my $nblocks = 0;
-  map { $nblocks += $_ } @blocks;
-
-  my ($needed, $where, $howmuch);
-  while ($needed = padding_needed(\@tokens,\@blocks)) {
-    ($where,$howmuch) = @$needed;
-    if ($where < 0 && $howmuch < 0) {
-      return;
-    }
-
-    # select position to attempt padding.
-    #     position must be prior to where
-    #     choose position randomly, put random distribution
-    #         should be (heavily) biased towards
-    #         where.
-    my $pos = $where < 5 || rand() < 0.1 
-      ? hi_weighted_rand($where) : $where - 5 + hi_weighted_rand(5);
-    my $npad = $howmuch > 1 ? $howmuch - hi_weighted_rand($howmuch-1) : $howmuch;
-
-    try_to_pad($pos, $npad, \@tokens, \@contexts);
-
-    my $tlength = 0;
-    map { $tlength += length $_ } @tokens;
-    if ($tlength > $nblocks) {
-      print "Padded length exceeds space length.\n";
-
-      print_code_to_pic($Acme::AsciiArtinator::PIC, @tokens);
-      print "\n\n";
-
-      return;
-    }
-
-  }
-  return ([ @tokens ],[ @contexts ]);
-}
 
 #
 # can run from command line:
 #
-#   perl Acme/AsciiArtinator.pm art-file code-file [output-file]
+#   perl Acme/AsciiArtinator.pm [-d] art-file code-file [output-file]
 #
 if ($0 =~ /AsciiArtinator.pm/) {
+  my $debug = 0;
+  my $compile_check = 1;
+  my @opts = grep { /^-/ } @ARGV;
+  
+  @ARGV = grep { !/^-/ } @ARGV;
+  foreach my $opt (@opts) {
+    $debug = 1 if $opt eq '-d';
+    # $compile_check = 1 if $opt eq '-c';
+  }
+
   asciiartinate( art_file => $ARGV[0] ,
-	         code_file => $ARGV[1] ,
-                 output => $ARGV[2] || "ascii-art.pl" );
+	         code_file => $ARGV[1] , 
+                 output => $ARGV[2] || "ascii-art.pl",
+	         debug => $debug ,
+	         'compile-check' => $compile_check );
 }
 
 1;
@@ -778,7 +915,7 @@ Acme::AsciiArtinator - Embed Perl code in ASCII artwork
 
 =head1 VERSION
 
-0.02
+0.04
 
 =head1 SYNOPSIS
 
